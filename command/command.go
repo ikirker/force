@@ -40,6 +40,7 @@ var Commands = []*Command{
 	cmdSecurity,
 	cmdSobject,
 	cmdTest,
+	cmdTickets,
 	cmdTrace,
 	cmdUseDXAuth,
 	cmdVersion,
