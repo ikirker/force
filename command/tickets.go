@@ -47,6 +47,8 @@ func runTickets(cmd *Command, args []string) {
 			runTicketsWaiting(args[1:])
 		case "cli":
 			ErrorAndExit("not yet implemented")
+		case "open":
+			runTicketsOpen(args[1:])
 		case "_completion":
 			runTicketsCompletion(args[1:])
 			if len(args) == 3 {
@@ -102,10 +104,10 @@ func runTicketsCompletion(args []string) {
 }
 
 func runTicketsOpen(args []string) {
-	if len(args) > 3 {
+	if len(args) > 1 {
 		ErrorAndExit("only one id or number please")
 	}
-	ticketArg := args[2]
+	ticketArg := args[0]
 
 	// In theory this isn't foolproof but it seems to work
 	var argType string
@@ -118,7 +120,7 @@ func runTicketsOpen(args []string) {
 	// The URL field you want is BMCServiceDesk__Launch_console__c
 	//  but it comes wrapped as an <a href=""></a>
 	force, _ := ActiveForce()
-	soql := fmt.Sprintf("SELECT %s,BMCServiceDesk__Launch_console__c FROM BMCServiceDesk__Incident__c WHERE %s = '%s' LIMIT 1", argType, argType, string(ticketArg[0]))
+	soql := fmt.Sprintf("SELECT %s,BMCServiceDesk__Launch_console__c FROM BMCServiceDesk__Incident__c WHERE %s = '%s' LIMIT 1", argType, argType, ticketArg)
 	records, err := force.Query(fmt.Sprintf("%s", soql))
 
 	if err != nil {
@@ -129,12 +131,14 @@ func runTicketsOpen(args []string) {
 	}
 	ticketAnchor := records.Records[0]["BMCServiceDesk__Launch_console__c"].(string)
 	ticketAnchorParts := strings.Split(ticketAnchor, "\"")
-	if len(ticketAnchorParts) != 3 {
+	// 2 for href="", 2 for target="", 1 for fence-post
+	if len(ticketAnchorParts) != 5 {
 		ErrorAndExit("ticket URL was not in the format we expect\n")
 	}
 	ticketURL := ticketAnchorParts[1]
-
-	err = desktop.Open(ticketURL)
+	// Unfortunately I can't work out the proper prefix for these URLs right now
+	fmt.Println(ticketURL)
+	//err = desktop.Open(ticketURL)
 	if err != nil {
 		ErrorAndExit(err.Error())
 	}
