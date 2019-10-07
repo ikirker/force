@@ -108,16 +108,17 @@ func runTicketsOpen(args []string) {
 	ticketArg := args[2]
 
 	// In theory this isn't foolproof but it seems to work
-	if ticketArg[0] == "a" {
-		argType := "Id"
+	var argType string
+	if ticketArg[0] == byte('a') {
+		argType = "Id"
 	} else {
-		argType := "Name"
+		argType = "Name"
 	}
 
 	// The URL field you want is BMCServiceDesk__Launch_console__c
 	//  but it comes wrapped as an <a href=""></a>
 	force, _ := ActiveForce()
-	soql := fmt.Sprintf("SELECT %s,BMCServiceDesk__Launch_console__c FROM BMCServiceDesk__Incident__c WHERE %s = '%s' LIMIT 1", argType, argType, ticketArg[0])
+	soql := fmt.Sprintf("SELECT %s,BMCServiceDesk__Launch_console__c FROM BMCServiceDesk__Incident__c WHERE %s = '%s' LIMIT 1", argType, argType, string(ticketArg[0]))
 	records, err := force.Query(fmt.Sprintf("%s", soql))
 
 	if err != nil {
@@ -126,14 +127,14 @@ func runTicketsOpen(args []string) {
 		// Temporary: for showing guts
 		fmt.Printf("%+v\n", records)
 	}
-	ticketAnchor := records["BMCServiceDesk__Launch_console__c"]
+	ticketAnchor := records.Records[0]["BMCServiceDesk__Launch_console__c"].(string)
 	ticketAnchorParts := strings.Split(ticketAnchor, "\"")
 	if len(ticketAnchorParts) != 3 {
 		ErrorAndExit("ticket URL was not in the format we expect\n")
 	}
 	ticketURL := ticketAnchorParts[1]
 
-	err := desktop.Open(ticketURL)
+	err = desktop.Open(ticketURL)
 	if err != nil {
 		ErrorAndExit(err.Error())
 	}
