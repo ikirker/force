@@ -11,6 +11,10 @@ import (
 	desktop "github.com/ForceCLI/force/desktop"
 	. "github.com/ForceCLI/force/error"
 	. "github.com/ForceCLI/force/lib"
+
+	"html/template"
+	"log"
+	"net/http"
 )
 
 var cmdTickets = &Command{
@@ -66,6 +70,8 @@ func runTickets(cmd *Command, args []string) {
 			runGetTicketHistory(args[1:])
 		case "open":
 			runTicketsOpen(args[1:])
+		case "serve":
+			runTicketServer(args[1:])
 		case "_completion":
 			runTicketsCompletion(args[1:])
 			if len(args) == 3 {
@@ -180,7 +186,10 @@ func runGetTicketDescriptions(args []string) {
 		}
 	}
 
-	tickets := GetTicketsByID(args)
+	tickets, err := GetTicketsByID(args)
+	if err != nil {
+		panic(err)
+	}
 
 	for _, ticket := range tickets {
 		fmt.Println("Id: ", ticket["Id"])
@@ -202,7 +211,10 @@ func ticketNameToId(name string) string {
 	name = strings.TrimPrefix(name, "IN")
 	name = "Name:" + name
 	var ticketArr []ForceRecord
-	ticketArr = GetTicketsByID([]string{name})
+	ticketArr, err := GetTicketsByID([]string{name})
+	if err != nil {
+		panic(err)
+	}
 	return ticketArr[0]["Id"].(string)
 }
 
@@ -245,18 +257,18 @@ func GetHistories(ticketID string) (ForceQueryResult, error) {
 	return force.Query(fmt.Sprintf("%s", soql))
 }
 
-func GetTicketsByID(ticketIDs []string) []ForceRecord {
+func GetTicketsByID(ticketIDs []string) ([]ForceRecord, error) {
 	tickets := []ForceRecord{}
 
 	force, _ := ActiveForce()
 	for _, arg := range ticketIDs {
 		record, err := force.GetRecord("BMCServiceDesk__Incident__c", arg)
 		if err != nil {
-			panic(err)
+			return nil, err
 		}
 		tickets = append(tickets, record)
 	}
-	return tickets
+	return tickets, nil
 }
 
 func runTicketsOpen(args []string) {
@@ -301,3 +313,239 @@ func runTicketsOpen(args []string) {
 		ErrorAndExit(err.Error())
 	}
 }
+
+/// Server code
+
+func getURLReqKey(req *http.Request, key string) string {
+	keys, err := req.URL.Query()[key]
+
+	if !err || len(keys[0]) < 1 {
+		log.Fatalln("Url Param ", key, " is missing")
+		return ""
+	}
+
+	// Query()["key"] will return an array of items,
+	// we only want the single item.
+	val := keys[0]
+	return val
+}
+
+// Deinterface
+func dis(val interface{}) string {
+	switch v := val.(type) {
+	case int:
+		return fmt.Sprintf("%d", v)
+	case string:
+		return v
+	case nil:
+		return "nil"
+	default:
+		return fmt.Sprintf("%V", v)
+	}
+}
+
+// Super-simple plaintext-to-HTML to avoid using <pre> or ignoring all whitespace
+func p2h(s string) template.HTML {
+	o := template.HTMLEscapeString(s)
+	o = strings.ReplaceAll(o, "\n", "<br>\n")
+	return (template.HTML)(o)
+}
+
+func ticketServerHandler(w http.ResponseWriter, req *http.Request) {
+	ticketName := getURLReqKey(req, "num")
+
+	ticketName = strings.TrimPrefix(ticketName, "IN:")
+	ticketName = strings.TrimPrefix(ticketName, "IN")
+
+	ticketRecords, err := GetTicketsByID([]string{"Name:" + ticketName})
+	if err != nil {
+		templ := getErrorTemplate()
+		err := templ.Execute(w, err.Error())
+		if err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+
+	if len(ticketRecords) == 0 {
+		// Throw back empty
+		templ := getErrorTemplate()
+		err := templ.Execute(w, "Ticket not found")
+		if err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+	tr := ticketRecords[0]
+
+	var ticket templTicket
+	ticket.Number = ticketName
+	ticket.Summary = dis(tr["COL_UCL_Summary__c"])
+	ticket.Headers = []templTicketHeaderField{
+		templTicketHeaderField{Name: "Created On", Value: dis(tr["CreatedDate"])},
+		templTicketHeaderField{Name: "Last Modified", Value: dis(tr["LastModifiedDate"])},
+		templTicketHeaderField{Name: "Last Activity", Value: dis(tr["LastActivityDate"])},
+		templTicketHeaderField{Name: "From", Value: dis(tr["BMCServiceDesk__clientEmail__c"])},
+		templTicketHeaderField{Name: "User / UPI", Value: dis(tr["UCL_userid_UPI__c"])},
+	}
+	ticket.Description = p2h(dis(tr["BMCServiceDesk__incidentDescription__c"]))
+
+	templ := getTicketTemplate()
+	err = templ.Execute(w, ticket)
+	if err != nil {
+		log.Fatal(err)
+	}
+	return
+}
+
+func runTicketServer(args []string) {
+
+	http.HandleFunc("/ticket", ticketServerHandler)
+
+	log.Fatal(http.ListenAndServe("localhost:9090", nil))
+}
+
+type templTicket struct {
+	Number      string // Sorry
+	Summary     string
+	Headers     []templTicketHeaderField
+	Description template.HTML
+	Histories   []templTicketHistory
+}
+
+type templTicketHeaderField struct {
+	Name  string
+	Value string
+}
+
+type templTicketHistory struct {
+	Headers     []templTicketHeaderField
+	Description []string
+}
+
+var templateHeader = `<!DOCTYPE html>
+<html>
+	<head>
+		<link
+			href="https://unpkg.com/sanitize.css"
+			rel="stylesheet"
+			/>
+		<style>
+* {
+	font-family: "Source Serif Pro";
+}
+body {
+	background-color: #452b27; 
+}
+article {
+	max-width: 80%;
+	margin: 2em;
+	padding: 2em;
+	align: center;
+	display: block;
+	margin-left: auto;
+	margin-right: auto;
+	background-color: wheat;
+}
+
+h2 {
+	font-style: italic;
+}
+h2::before {
+	color: #442000;
+	content: "“"
+}
+h2::after {
+	color: #442000;
+	content: "”"
+}
+
+table { border: 2px ridge #361d18; }
+td { padding: 0.5em; }
+td.table-field-key { font-weight: bold; }
+tr:nth-child(even) {background-color: #e5cea3;}
+
+.body-text {
+}
+</style>
+</head>
+	<body>
+		<header>
+		</header>
+`
+
+var templateFooter = `
+	</body>
+</html>
+`
+
+func getErrorTemplate() *template.Template {
+	ts := templateHeader + `<article><h1>Error</h1><h2>{{.}}</h2></article>` + templateFooter
+	t, err := template.New("ticket").Parse(ts)
+	if err != nil {
+		panic(err)
+	}
+	return t
+}
+
+func getTicketTemplate() *template.Template {
+	ts := templateHeader + `
+		<article>
+			<h1>IN:{{.Number}}</h1>
+			<h2>{{.Summary}}</h2>
+			<section class="ticket-header">
+				<table>
+						<!-- <th><td></td><td></td></th> -->
+					{{range .Headers}}
+						<tr><td class="table-field-key">{{.Name}}</td><td>{{.Value}}</td></tr>
+					{{end}}
+				</table>
+			</section>
+			<section class="ticket-body">
+				<p>
+					{{.Description}}
+				</p>
+			</section>
+		</article>
+		{{range .Histories}}
+			<hr>
+			<article>
+				<section class="ticket-followup-header">
+					<table>
+						<!-- <th><td></td><td></td></th> -->
+						{{range .Headers}}
+							<tr><td class="table-field-key">{{.Name}}</td><td>{{.Value}}</td></tr>
+						{{end}}
+					</table>
+				</section>
+				<section class="ticket-followup-body">
+					{{.Description}}
+				</section>
+			</article>
+		{{end}}
+` + templateFooter
+
+	t, err := template.New("ticket").Parse(ts)
+	if err != nil {
+		panic(err)
+	}
+	return t
+}
+
+var tsend = `
+		{{range .Histories}}
+			<article>
+				<section class="ticket-followup-header">
+					<table>
+						<!-- <th><td></td><td></td></th> -->
+						{{range .Headers}}
+							<tr><td class="table-field-key">{{.Name}}</td><td>{{.Value}}</td></tr>
+						{{end}}
+					</table>
+				</section>
+				<section class="ticket-followup-body">
+					{{.Description}}
+				</section>
+			</article>
+		{{end}}
+		`
