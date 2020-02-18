@@ -314,7 +314,16 @@ func runTicketsOpen(args []string) {
 	}
 }
 
-/// Server code
+/// ---------------------------------------------------------
+///    Server code
+///
+func runTicketServer(args []string) {
+	http.HandleFunc("/ticket", ticketDisplayHandler)
+	http.HandleFunc("/tickets", ticketListHandler)
+
+	log.Println("Starting up server on http://localhost:9090 ...")
+	log.Fatal(http.ListenAndServe("localhost:9090", nil))
+}
 
 func getURLReqKey(req *http.Request, key string) string {
 	keys, err := req.URL.Query()[key]
@@ -351,7 +360,13 @@ func p2h(s string) template.HTML {
 	return (template.HTML)(o)
 }
 
-func ticketServerHandler(w http.ResponseWriter, req *http.Request) {
+func logHTTPRequest(req *http.Request) {
+	log.Printf("new_request from=%s method=%s url=%s", req.RemoteAddr, req.Method, req.URL)
+}
+
+func ticketDisplayHandler(w http.ResponseWriter, req *http.Request) {
+	logHTTPRequest(req)
+
 	ticketName := getURLReqKey(req, "num")
 
 	ticketName = strings.TrimPrefix(ticketName, "IN:")
@@ -379,6 +394,7 @@ func ticketServerHandler(w http.ResponseWriter, req *http.Request) {
 	tr := ticketRecords[0]
 
 	var ticket templTicket
+	ticket.Id = dis(tr["Id"]) // We need this for deeplinking.
 	ticket.Number = ticketName
 	ticket.Summary = dis(tr["COL_UCL_Summary__c"])
 	ticket.Headers = []templTicketHeaderField{
@@ -398,14 +414,13 @@ func ticketServerHandler(w http.ResponseWriter, req *http.Request) {
 	return
 }
 
-func runTicketServer(args []string) {
-
-	http.HandleFunc("/ticket", ticketServerHandler)
-
-	log.Fatal(http.ListenAndServe("localhost:9090", nil))
+func ticketListHandler(w http.ResponseWriter, req *http.Request) {
+	//templ := getTicketListTemplate()
+	//templ.Execute(w, ticketList)
 }
 
 type templTicket struct {
+	Id          string
 	Number      string // Sorry
 	Summary     string
 	Headers     []templTicketHeaderField
@@ -419,133 +434,23 @@ type templTicketHeaderField struct {
 }
 
 type templTicketHistory struct {
+	Id          string
 	Headers     []templTicketHeaderField
 	Description []string
 }
 
-var templateHeader = `<!DOCTYPE html>
-<html>
-	<head>
-		<link
-			href="https://unpkg.com/sanitize.css"
-			rel="stylesheet"
-			/>
-		<style>
-* {
-	font-family: "Source Serif Pro";
-}
-body {
-	background-color: #452b27; 
-}
-article {
-	max-width: 80%;
-	margin: 2em;
-	padding: 2em;
-	align: center;
-	display: block;
-	margin-left: auto;
-	margin-right: auto;
-	background-color: wheat;
-}
-
-h2 {
-	font-style: italic;
-}
-h2::before {
-	color: #442000;
-	content: "“"
-}
-h2::after {
-	color: #442000;
-	content: "”"
-}
-
-table { border: 2px ridge #361d18; }
-td { padding: 0.5em; }
-td.table-field-key { font-weight: bold; }
-tr:nth-child(even) {background-color: #e5cea3;}
-
-.body-text {
-}
-</style>
-</head>
-	<body>
-		<header>
-		</header>
-`
-
-var templateFooter = `
-	</body>
-</html>
-`
-
-func getErrorTemplate() *template.Template {
-	ts := templateHeader + `<article><h1>Error</h1><h2>{{.}}</h2></article>` + templateFooter
-	t, err := template.New("ticket").Parse(ts)
-	if err != nil {
-		panic(err)
+func populateTicket(fr ForceRecord) *templTicket {
+	ticket := &templTicket{}
+	ticket.Id = dis(fr["Id"]) // We need this for deeplinking.
+	ticket.Number = dis(fr["Name"])
+	ticket.Summary = dis(fr["COL_UCL_Summary__c"])
+	ticket.Headers = []templTicketHeaderField{
+		templTicketHeaderField{Name: "Created On", Value: dis(fr["CreatedDate"])},
+		templTicketHeaderField{Name: "Last Modified", Value: dis(fr["LastModifiedDate"])},
+		templTicketHeaderField{Name: "Last Activity", Value: dis(fr["LastActivityDate"])},
+		templTicketHeaderField{Name: "From", Value: dis(fr["BMCServiceDesk__clientEmail__c"])},
+		templTicketHeaderField{Name: "User / UPI", Value: dis(fr["UCL_userid_UPI__c"])},
 	}
-	return t
+	ticket.Description = p2h(dis(fr["BMCServiceDesk__incidentDescription__c"]))
+	return ticket
 }
-
-func getTicketTemplate() *template.Template {
-	ts := templateHeader + `
-		<article>
-			<h1>IN:{{.Number}}</h1>
-			<h2>{{.Summary}}</h2>
-			<section class="ticket-header">
-				<table>
-						<!-- <th><td></td><td></td></th> -->
-					{{range .Headers}}
-						<tr><td class="table-field-key">{{.Name}}</td><td>{{.Value}}</td></tr>
-					{{end}}
-				</table>
-			</section>
-			<section class="ticket-body">
-				<p>
-					{{.Description}}
-				</p>
-			</section>
-		</article>
-		{{range .Histories}}
-			<hr>
-			<article>
-				<section class="ticket-followup-header">
-					<table>
-						<!-- <th><td></td><td></td></th> -->
-						{{range .Headers}}
-							<tr><td class="table-field-key">{{.Name}}</td><td>{{.Value}}</td></tr>
-						{{end}}
-					</table>
-				</section>
-				<section class="ticket-followup-body">
-					{{.Description}}
-				</section>
-			</article>
-		{{end}}
-` + templateFooter
-
-	t, err := template.New("ticket").Parse(ts)
-	if err != nil {
-		panic(err)
-	}
-	return t
-}
-
-var tsend = `
-		{{range .Histories}}
-			<article>
-				<section class="ticket-followup-header">
-					<table>
-						<!-- <th><td></td><td></td></th> -->
-						{{range .Headers}}
-							<tr><td class="table-field-key">{{.Name}}</td><td>{{.Value}}</td></tr>
-						{{end}}
-					</table>
-				</section>
-				<section class="ticket-followup-body">
-					{{.Description}}
-				</section>
-			</article>
-		{{end}}
-		`
